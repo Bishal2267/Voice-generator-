@@ -146,6 +146,29 @@
 
         let generatedAudioBlob = null; // Variable to store the generated audio blob
 
+        // API call with exponential backoff for handling potential rate limits
+        async function fetchWithExponentialBackoff(url, options, retries = 5, delay = 1000) {
+            try {
+                const response = await fetch(url, options);
+                if (response.status === 429 && retries > 0) { // Too Many Requests
+                    console.warn(`Rate limit exceeded. Retrying in ${delay / 1000}s...`);
+                    await new Promise(resolve => setTimeout(resolve, delay));
+                    return fetchWithExponentialBackoff(url, options, retries - 1, delay * 2);
+                }
+                if (!response.ok) {
+                    throw new Error(`API returned status ${response.status}: ${response.statusText}`);
+                }
+                return await response.json();
+            } catch (error) {
+                if (retries > 0) {
+                    console.warn(`Fetch failed. Retrying in ${delay / 1000}s...`);
+                    await new Promise(resolve => setTimeout(resolve, delay));
+                    return fetchWithExponentialBackoff(url, options, retries - 1, delay * 2);
+                }
+                throw error;
+            }
+        }
+
         // Main function to process the script and play audio chunks
         async function processAndPlayScript() {
             const script = scriptTextarea.value;
@@ -164,26 +187,26 @@
             
             try {
                 // Split the script into chunks based on newlines, pauses, and ellipses
-                const chunks = script.split(/(\r?\n|\.\.\.)/);
+                const chunks = script.split(/(\r?\n|<pause=.*?>|\.\.\.)/);
                 
                 const audioBlobs = [];
 
                 for (let i = 0; i < chunks.length; i++) {
                     const chunk = chunks[i].trim();
                     if (!chunk) continue;
-
+                    
                     // Handle pause tags first
                     const pauseMatch = chunk.match(/<pause=(\d+)ms>/);
                     if (pauseMatch) {
                         const pauseDuration = parseInt(pauseMatch[1], 10);
                         statusMessage.textContent = `Pausing for ${pauseDuration}ms...`;
                         await new Promise(resolve => setTimeout(resolve, pauseDuration));
-                        continue; // Skip to the next chunk
+                        continue;
                     }
-
+                    
                     // Handle emphasis tags by rephrasing the prompt
-                    const emphasisMatch = chunk.match(/<emphasis>(.*?)<\/emphasis>/);
                     let processedText = chunk;
+                    const emphasisMatch = chunk.match(/<emphasis>(.*?)<\/emphasis>/);
                     let promptInstruction = '';
 
                     if (emphasisMatch) {
@@ -192,7 +215,7 @@
                         promptInstruction = `Say with emphasis: ${emphasizedText}.`;
                     }
                     
-                    // Cleanup other tags
+                    // Cleanup any other tags that might be in the script.
                     const cleanedText = processedText.replace(/<[^>]*>/g, '').trim();
                     if (!cleanedText) continue;
 
@@ -206,7 +229,6 @@
                             responseModalities: ["AUDIO"],
                             speechConfig: {
                                 voiceConfig: {
-                                    // 'Rasalgethi' voice is selected for an informative tone.
                                     prebuiltVoiceConfig: { voiceName: "Rasalgethi" } 
                                 }
                             }
@@ -217,13 +239,12 @@
                     const apiKey = "";
                     const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent?key=${apiKey}`;
 
-                    const response = await fetch(apiUrl, {
+                    const result = await fetchWithExponentialBackoff(apiUrl, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify(payload)
                     });
 
-                    const result = await response.json();
                     const part = result?.candidates?.[0]?.content?.parts?.[0];
                     
                     if (!part || !part.inlineData || !part.inlineData.data) {
