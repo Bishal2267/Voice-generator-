@@ -32,6 +32,9 @@
             0% { transform: rotate(0deg); }
             100% { transform: rotate(360deg); }
         }
+        .error-message {
+            color: #f87171;
+        }
     </style>
 </head>
 <body class="p-4 sm:p-8 flex flex-col items-center justify-center min-h-screen">
@@ -80,7 +83,6 @@
         </div>
 
         <div id="statusMessage" class="text-center text-sm font-medium text-slate-400"></div>
-
     </div>
 
     <script>
@@ -174,6 +176,7 @@
             const script = scriptTextarea.value;
             if (!script) {
                 statusMessage.textContent = 'कृपया कुछ टेक्स्ट डालें।';
+                statusMessage.classList.add('error-message');
                 return;
             }
 
@@ -183,97 +186,89 @@
             buttonText.textContent = 'ऑडियो जनरेट हो रहा है...';
             loadingIndicator.classList.remove('hidden');
             statusMessage.textContent = 'ऑडियो जनरेट हो रहा है, कृपया प्रतीक्षा करें...';
+            statusMessage.classList.remove('error-message');
             audioPlayer.src = '';
             
             try {
                 // Split the script into chunks based on newlines, pauses, and ellipses
                 const chunks = script.split(/(\r?\n|<pause=.*?>|\.\.\.)/);
-                
                 const audioBlobs = [];
-
+                const finalScript = [];
+                
+                // Process chunks to handle pauses and clean up text
                 for (let i = 0; i < chunks.length; i++) {
                     const chunk = chunks[i].trim();
                     if (!chunk) continue;
                     
-                    // Handle pause tags first
                     const pauseMatch = chunk.match(/<pause=(\d+)ms>/);
                     if (pauseMatch) {
                         const pauseDuration = parseInt(pauseMatch[1], 10);
-                        statusMessage.textContent = `Pausing for ${pauseDuration}ms...`;
-                        await new Promise(resolve => setTimeout(resolve, pauseDuration));
+                        finalScript.push({ type: 'pause', duration: pauseDuration });
                         continue;
                     }
                     
-                    // Handle emphasis tags by rephrasing the prompt
-                    let processedText = chunk;
                     const emphasisMatch = chunk.match(/<emphasis>(.*?)<\/emphasis>/);
+                    let cleanedText = chunk.replace(/<[^>]*>/g, '').trim();
                     let promptInstruction = '';
 
                     if (emphasisMatch) {
                         const emphasizedText = emphasisMatch[1];
-                        processedText = chunk.replace(emphasisMatch[0], emphasizedText);
                         promptInstruction = `Say with emphasis: ${emphasizedText}.`;
                     }
                     
-                    // Cleanup any other tags that might be in the script.
-                    const cleanedText = processedText.replace(/<[^>]*>/g, '').trim();
-                    if (!cleanedText) continue;
-
-                    statusMessage.textContent = `Generateting audio for: "${cleanedText}"`;
-
-                    const payload = {
-                        contents: [{
-                            parts: [{ text: `${promptInstruction} ${cleanedText}`.trim() }]
-                        }],
-                        generationConfig: {
-                            responseModalities: ["AUDIO"],
-                            speechConfig: {
-                                voiceConfig: {
-                                    prebuiltVoiceConfig: { voiceName: "Rasalgethi" } 
-                                }
-                            }
-                        },
-                        model: "gemini-2.5-flash-preview-tts"
-                    };
-
-                    const apiKey = "curl "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent" \
-  -H 'Content-Type: application/json' \
-  -H 'X-goog-api-key: GEMINI_API_KEY' \
-  -X POST \
-  -d '{
-    "contents": [
-      {
-        "parts": [
-          {
-            "text": "Explain how AI works in a few words"
-          }
-        ]
-      }
-    ]
-  }'";
-                    const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent?key=${apiKey}`;
-
-                    const result = await fetchWithExponentialBackoff(apiUrl, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify(payload)
-                    });
-
-                    const part = result?.candidates?.[0]?.content?.parts?.[0];
-                    
-                    if (!part || !part.inlineData || !part.inlineData.data) {
-                        throw new Error('API response does not contain audio data.');
+                    if (cleanedText) {
+                        finalScript.push({ type: 'text', text: cleanedText, instruction: promptInstruction });
                     }
-                    
-                    const audioData = part.inlineData.data;
-                    const mimeType = part.inlineData.mimeType;
-                    const sampleRateMatch = mimeType.match(/rate=(\d+)/);
-                    const sampleRate = sampleRateMatch ? parseInt(sampleRateMatch[1], 10) : 16000;
-                    
-                    const pcmData = base64ToArrayBuffer(audioData);
-                    const pcm16 = new Int16Array(pcmData);
-                    const wavBlob = pcmToWav(pcm16, sampleRate);
-                    audioBlobs.push(wavBlob);
+                }
+
+                // Call API for each text chunk and handle pauses
+                for (const item of finalScript) {
+                    if (item.type === 'pause') {
+                        statusMessage.textContent = `Pausing for ${item.duration}ms...`;
+                        await new Promise(resolve => setTimeout(resolve, item.duration));
+                    } else if (item.type === 'text') {
+                        statusMessage.textContent = `Generating audio for: "${item.text}"`;
+
+                        const payload = {
+                            contents: [{
+                                parts: [{ text: `${item.instruction} ${item.text}`.trim() }]
+                            }],
+                            generationConfig: {
+                                responseModalities: ["AUDIO"],
+                                speechConfig: {
+                                    voiceConfig: {
+                                        prebuiltVoiceConfig: { voiceName: "Rasalgethi" } 
+                                    }
+                                }
+                            },
+                            model: "gemini-2.5-flash-preview-tts"
+                        };
+
+                        const apiKey = "AIzaSyCJrw4kXFE8ouz55P3pMRbjfsq8wMUsnlc";
+                        const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent?key=${apiKey}`;
+
+                        const result = await fetchWithExponentialBackoff(apiUrl, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(payload)
+                        });
+
+                        const part = result?.candidates?.[0]?.content?.parts?.[0];
+                        
+                        if (!part || !part.inlineData || !part.inlineData.data) {
+                            throw new Error('API response does not contain audio data. Please check the network tab for more details.');
+                        }
+                        
+                        const audioData = part.inlineData.data;
+                        const mimeType = part.inlineData.mimeType;
+                        const sampleRateMatch = mimeType.match(/rate=(\d+)/);
+                        const sampleRate = sampleRateMatch ? parseInt(sampleRateMatch[1], 10) : 16000;
+                        
+                        const pcmData = base64ToArrayBuffer(audioData);
+                        const pcm16 = new Int16Array(pcmData);
+                        const wavBlob = pcmToWav(pcm16, sampleRate);
+                        audioBlobs.push(wavBlob);
+                    }
                 }
 
                 // Concatenate all audio blobs and play
@@ -283,11 +278,13 @@
                 
                 audioPlayer.src = audioUrl;
                 statusMessage.textContent = 'ऑडियो सफलतापूर्वक जनरेट हो गया है। आप इसे अब सुन सकते हैं।';
+                statusMessage.classList.remove('error-message');
                 downloadButton.classList.remove('hidden'); // Show download button
 
             } catch (error) {
                 console.error('Error generating audio:', error);
                 statusMessage.textContent = `त्रुटि: ${error.message}. कृपया अपनी स्क्रिप्ट जांचें और फिर से कोशिश करें।`;
+                statusMessage.classList.add('error-message');
             } finally {
                 generateButton.disabled = false;
                 buttonText.textContent = 'ऑडियो जनरेट करें';
